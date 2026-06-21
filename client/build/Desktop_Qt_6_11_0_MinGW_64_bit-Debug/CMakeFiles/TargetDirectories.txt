@@ -1,0 +1,5 @@
+C:/my-github-project/rust/chat_app/client/build/Desktop_Qt_6_11_0_MinGW_64_bit-Debug/CMakeFiles/chat_client.dir
+C:/my-github-project/rust/chat_app/client/build/Desktop_Qt_6_11_0_MinGW_64_bit-Debug/CMakeFiles/edit_cache.dir
+C:/my-github-project/rust/chat_app/client/build/Desktop_Qt_6_11_0_MinGW_64_bit-Debug/CMakeFiles/rebuild_cache.dir
+C:/my-github-project/rust/chat_app/client/build/Desktop_Qt_6_11_0_MinGW_64_bit-Debug/CMakeFiles/chat_client_autogen_timestamp_deps.dir
+C:/my-github-project/rust/chat_app/client/build/Desktop_Qt_6_11_0_MinGW_64_bit-Debug/CMakeFiles/chat_client_autogen.dir

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/my-github-project/rust/chat_app/client/build/Desktop_Qt_6_11_0_MinGW_64_bit-Debug/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
