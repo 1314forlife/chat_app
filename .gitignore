@@ -45,3 +45,4 @@ client/CMakeLists.txt.user
 *.pdb
 EOFclient/.qtcreator/ 
 client_old/ 
+client/.qtcreator/ 
