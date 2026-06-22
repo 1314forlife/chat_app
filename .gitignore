@@ -43,6 +43,6 @@ client/CMakeLists.txt.user
 *.dll
 *.exe
 *.pdb
-EOFclient/.qtcreator/ 
-client_old/ 
 client/.qtcreator/ 
+client_old/ 
+
