@@ -11,9 +11,18 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
 
-# ============================================================
-# 源文件列表
-# ============================================================
+set(THIRD_PARTY_DIR ${CMAKE_SOURCE_DIR}/third_party)
+
+# Boost 头文件路径（使用 Boost.Asio，不定义 ASIO_STANDALONE）
+set(BOOST_INCLUDE_DIR ${THIRD_PARTY_DIR}/boost_1_82_0)
+include_directories(${BOOST_INCLUDE_DIR})
+
+# websocketpp
+set(WEBSOCKETPP_INCLUDE_DIR ${THIRD_PARTY_DIR}/websocketpp)
+include_directories(${WEBSOCKETPP_INCLUDE_DIR})
+
+include_directories(${CMAKE_SOURCE_DIR}/src)
+
 set(SOURCES
     src/main.cpp
     src/common/Logger.cpp
@@ -36,9 +45,6 @@ set(SOURCES
     src/ui/MessageBubble.cpp
 )
 
-# ============================================================
-# 头文件列表
-# ============================================================
 set(HEADERS
     src/common/Constants.h
     src/common/Logger.h
@@ -74,28 +80,22 @@ set(HEADERS
     src/ui/MessageBubble.h
 )
 
-# ============================================================
-# 资源文件
-# ============================================================
 set(RESOURCES
-    resources/style.qss
+    resources/resources.qrc
 )
 
-# ============================================================
-# 可执行文件
-# ============================================================
-qt_add_executable(chat_client ${SOURCES} ${HEADERS} ${RESOURCES})
 
-# ============================================================
-# 链接库
-# ============================================================
+qt_add_executable(chat_client ${SOURCES} ${HEADERS})
+
+qt_add_resources(chat_client "resources"
+    resources/resources.qrc
+)
+
 target_link_libraries(chat_client PRIVATE
     Qt6::Core
     Qt6::Widgets
     Qt6::Network
+    ws2_32
 )
 
-# ============================================================
-# 包含目录
-# ============================================================
 target_include_directories(chat_client PRIVATE src)

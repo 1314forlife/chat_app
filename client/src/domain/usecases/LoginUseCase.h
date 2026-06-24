@@ -21,10 +21,20 @@ public:
 signals:
     void loginSuccess(const QVariantMap &userData);
     void loginFailed(const QString &error);
+    void registerSuccess(const QString &username);  // ✅ 新增：注册成功信号
+
+private slots:
+    void onWebSocketConnected();
+    void onMessageReceived(const QString &message);
 
 private:
     std::shared_ptr<MemoryUserRepository> m_userRepo;
     std::shared_ptr<WebSocketClient> m_wsClient;
+
+    QString m_pendingUsername;
+    QString m_pendingNickname;
+    bool m_isRegisterMode = false;
+    bool m_processed = false;
 };
 
 #endif

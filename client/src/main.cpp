@@ -1,5 +1,7 @@
 #include <QApplication>
 #include <QDebug>
+#include <memory>
+#include <functional>
 #include "ui/LoginDialog.h"
 #include "ui/MainWindow.h"
 #include "application/controllers/LoginController.h"
@@ -8,7 +10,6 @@
 #include "infrastructure/repositories/MemoryUserRepository.h"
 #include "infrastructure/repositories/MemoryMessageRepository.h"
 #include "infrastructure/serialization/JsonSerializer.h"
-#include "domain/entities/User.h"
 
 int main(int argc, char *argv[])
 {
@@ -16,7 +17,6 @@ int main(int argc, char *argv[])
 
     qDebug() << "🚀 启动聊天客户端...";
 
-    // 依赖注入
     auto userRepo = std::make_shared<MemoryUserRepository>();
     auto messageRepo = std::make_shared<MemoryMessageRepository>();
     auto wsClient = std::make_shared<WebSocketClient>();
@@ -25,25 +25,27 @@ int main(int argc, char *argv[])
     auto loginUseCase = std::make_shared<LoginUseCase>(userRepo, wsClient);
     auto loginController = std::make_shared<LoginController>(loginUseCase);
 
-    // 创建主窗口（先不显示）
-    auto mainWindow = std::make_shared<MainWindow>();
+    auto mainWindow = std::make_shared<MainWindow>(loginUseCase, wsClient);
 
-    // 创建登录对话框
     LoginDialog loginDialog(loginController);
 
-    // 登录成功后显示主窗口
-    QObject::connect(&loginDialog, &LoginDialog::accepted, [&]() {
-        qDebug() << "✅ 登录成功，显示主窗口";
-        mainWindow->show();
-    });
+    QObject::connect(loginController.get(), &LoginController::loginSuccess,
+                     std::function<void(const QVariantMap&)>([&](const QVariantMap &userData) {
+                         QString username = userData["username"].toString();
+                         qDebug() << "✅ 登录成功，设置当前用户:" << username;
+                         mainWindow->setCurrentUser(username);
+                         mainWindow->show();
+                         loginDialog.accept();
+                     })
+                     );
 
-    // 登录失败时重新显示登录对话框
-    QObject::connect(loginController.get(), &LoginController::loginFailed, [&]() {
-        qDebug() << "❌ 登录失败，重新显示登录对话框";
-        loginDialog.show();
-    });
+    QObject::connect(loginController.get(), &LoginController::loginFailed,
+                     std::function<void(const QString&)>([&](const QString &error) {
+                         qDebug() << "❌ 登录失败:" << error;
+                         loginDialog.show();
+                     })
+                     );
 
-    // 显示登录对话框（模态）
     loginDialog.exec();
 
     return app.exec();

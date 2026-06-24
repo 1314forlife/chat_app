@@ -46,3 +46,4 @@ client/CMakeLists.txt.user
 client/.qtcreator/ 
 client_old/ 
 
+client/third_party/ 

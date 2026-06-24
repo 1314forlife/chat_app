@@ -7,6 +7,7 @@ LoginController::LoginController(std::shared_ptr<LoginUseCase> loginUseCase,
 
 void LoginController::handleLogin(const QString &username, const QString &password)
 {
+    disconnect(m_loginUseCase.get(), nullptr, this, nullptr);
     connect(m_loginUseCase.get(), &LoginUseCase::loginSuccess,
             this, &LoginController::loginSuccess);
     connect(m_loginUseCase.get(), &LoginUseCase::loginFailed,
@@ -16,8 +17,9 @@ void LoginController::handleLogin(const QString &username, const QString &passwo
 
 void LoginController::handleRegister(const QString &username, const QString &password, const QString &nickname)
 {
-    connect(m_loginUseCase.get(), &LoginUseCase::loginSuccess,
-            this, &LoginController::loginSuccess);
+    disconnect(m_loginUseCase.get(), nullptr, this, nullptr);
+    connect(m_loginUseCase.get(), &LoginUseCase::registerSuccess,  // ✅ 连接
+            this, &LoginController::registerSuccess);
     connect(m_loginUseCase.get(), &LoginUseCase::loginFailed,
             this, &LoginController::loginFailed);
     m_loginUseCase->registerUser(username, password, nickname);

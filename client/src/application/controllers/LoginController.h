@@ -19,6 +19,7 @@ public:
 signals:
     void loginSuccess(const QVariantMap &userData);
     void loginFailed(const QString &error);
+    void registerSuccess(const QString &username);  // ✅ 添加
 
 private:
     std::shared_ptr<LoginUseCase> m_loginUseCase;

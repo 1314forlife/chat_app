@@ -21,6 +21,7 @@ private slots:
     void onRegisterClicked();
     void onLoginSuccess(const QVariantMap &userData);
     void onLoginFailed(const QString &error);
+    void onRegisterSuccess(const QString &username);
 
 private:
     void setupUI();
