@@ -25,19 +25,23 @@ impl BroadcastManager {
     
     pub fn register(&self, id: String, sender: mpsc::UnboundedSender<String>) {
         let mut clients = self.clients.write().unwrap();
+        println!("📝 注册连接: conn_id={}", id);
         clients.insert(id.clone(), ClientConnection {
             id,
             user_id: None,
             sender,
         });
+        println!("📊 当前连接数: {}", clients.len());
     }
     
     pub fn bind_user(&self, conn_id: &str, user_id: &str) -> Result<()> {
         let mut clients = self.clients.write().unwrap();
         if let Some(conn) = clients.get_mut(conn_id) {
             conn.user_id = Some(user_id.to_string());
+            println!("🔗 绑定用户: conn_id={}, user_id={}", conn_id, user_id);
             Ok(())
         } else {
+            println!("❌ 绑定失败: conn_id={} 不存在", conn_id);
             Err(ChatError::Internal("连接不存在".to_string()))
         }
     }
@@ -56,9 +60,13 @@ impl BroadcastManager {
     
     pub fn broadcast(&self, message: &str) -> Result<()> {
         let clients = self.clients.read().unwrap();
+        println!("📡 广播消息给 {} 个连接", clients.len());
         for conn in clients.values() {
-            if conn.user_id.is_some() {
-                let _ = conn.sender.send(message.to_string());
+            if let Some(ref user_id) = conn.user_id {
+                println!("   📤 发送给用户: {}", user_id);
+                if let Err(e) = conn.sender.send(message.to_string()) {
+                    println!("   ⚠️ 发送失败: {}", e);
+                }
             }
         }
         Ok(())
@@ -66,7 +74,9 @@ impl BroadcastManager {
     
     pub fn remove(&self, conn_id: &str) -> Result<()> {
         let mut clients = self.clients.write().unwrap();
-        clients.remove(conn_id);
+        let removed = clients.remove(conn_id);
+        println!("🗑️ 移除连接: conn_id={}, 成功={}, 剩余连接: {}", 
+                 conn_id, removed.is_some(), clients.len());
         Ok(())
     }
     

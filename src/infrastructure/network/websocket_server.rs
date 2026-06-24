@@ -18,7 +18,6 @@ use crate::infrastructure::broadcast::BroadcastManager;
 pub struct WebSocketServer {
     broadcast_manager: Arc<BroadcastManager>,
     chat_handler: Arc<ChatHandler>,
-    // 存储 conn_id -> user_id 的映射
     connections: Arc<Mutex<HashMap<String, String>>>,
 }
 
@@ -71,17 +70,37 @@ impl WebSocketServer {
                 Some(msg) = rx.recv() => {
                     println!("📡 广播消息: {}", msg);
                     if socket.send(Message::Text(msg)).await.is_err() {
+                        println!("⚠️ 广播发送失败，连接可能已断开");
                         break;
                     }
                 }
-                else => break,
+                else => {
+                    println!("⏰ 无事件，退出循环");
+                    break;
+                }
             }
         }
         
-        // 清理连接
-        let mut conns = self.connections.lock().await;
-        conns.remove(&conn_id);
-        println!("🔌 连接断开: conn_id={}", conn_id);
+        // ✅ 连接断开时自动登出
+        let username = {
+            let mut conns = self.connections.lock().await;
+            conns.remove(&conn_id)
+        };
+        
+        println!("🔌 连接断开: conn_id={}, username={:?}", conn_id, username);
+        
+        if let Some(username) = username {
+            println!("🚪 用户 {} 断开连接，自动登出", username);
+            let logout_request = ChatRequest {
+                cmd: "logout".to_string(),
+                data: serde_json::json!({ "username": username }),
+            };
+            let _ = self.chat_handler.handle_request(&username, logout_request).await;
+        }
+        
+        // ✅ 确保从 broadcast_manager 移除
+        let _ = self.broadcast_manager.remove(&conn_id);
+        
         Ok(())
     }
     
@@ -90,28 +109,32 @@ impl WebSocketServer {
         let request: ChatRequest = serde_json::from_str(text)?;
         println!("🔍 请求命令: {}", request.cmd);
         
-        // 获取当前连接对应的用户 ID
-        let user_id = {
-            let conns = self.connections.lock().await;
-            conns.get(conn_id).cloned()
-        };
-        
-        // 如果是登录请求，从请求中提取用户名并保存
+        // 如果是 login 请求，先清理该用户的旧连接
         if request.cmd == "login" {
             if let Ok(login_data) = serde_json::from_value::<crate::application::dto::LoginData>(request.data.clone()) {
-                let response = self.chat_handler.handle_request(&login_data.username, request)?;
-                // 保存 conn_id -> username 的映射
+                let response = self.chat_handler.handle_request(&login_data.username, request).await?;
+                
+                if let Err(e) = self.broadcast_manager.bind_user(conn_id, &login_data.username) {
+                    println!("❌ 绑定用户失败: {}", e);
+                } else {
+                    println!("✅ 绑定用户: {} -> {}", conn_id, login_data.username);
+                }
+                
                 let mut conns = self.connections.lock().await;
                 conns.insert(conn_id.to_string(), login_data.username);
                 return Ok(serde_json::to_value(&response)?);
             }
         }
         
-        // 非登录请求，使用已保存的用户 ID
+        // 非登录请求
+        let user_id = {
+            let conns = self.connections.lock().await;
+            conns.get(conn_id).cloned()
+        };
         let user_id = user_id.unwrap_or_else(|| "default_user".to_string());
         println!("🔍 当前用户: {}", user_id);
         
-        let response = self.chat_handler.handle_request(&user_id, request)?;
+        let response = self.chat_handler.handle_request(&user_id, request).await?;
         println!("🔍 响应: {:?}", response);
         Ok(serde_json::to_value(&response)?)
     }
