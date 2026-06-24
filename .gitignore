@@ -1,49 +1,49 @@
-# ===== 通用 =====
-.DS_Store
-*.log
-*.tmp
-.env
-*.swp
-*.swo
-Thumbs.db
-
-# ===== Rust (服务端) =====
-server/target/
-server/Cargo.lock
-server/**/*.rs.bk
-
-# ===== Qt (客户端) =====
-client/build/
-client/*.user
-client/*.creator.user*
-client/Makefile
-client/*.o
-client/*.exe
-client/*.dll
-client/*.so
-client/*.dylib
-client/moc_*.cpp
-client/ui_*.h
-client/qrc_*.cpp
-client/debug/
-client/release/
-client/.qtc_clangd/
-client/CMakeLists.txt.user
-
-# ===== IDE =====
-.vscode/
-.idea/
-*.iml
-
-# ===== 编译产物 =====
-*.o
-*.a
-*.so
-*.dylib
-*.dll
-*.exe
-*.pdb
+# ===== 通用 ===== 
+.DS_Store 
+*.log 
+*.tmp 
+.env 
+*.swp 
+*.swo 
+Thumbs.db 
+ 
+# ===== Rust (服务端) ===== 
+server/target/ 
+server/Cargo.lock 
+server/**/*.rs.bk 
+ 
+# ===== Qt (客户端) ===== 
+client/build/ 
+client/*.user 
+client/*.creator.user* 
+client/Makefile 
+client/*.o 
+client/*.exe 
+client/*.dll 
+client/*.so 
+client/*.dylib 
+client/moc_*.cpp 
+client/ui_*.h 
+client/qrc_*.cpp 
+client/debug/ 
+client/release/ 
+client/.qtc_clangd/ 
+client/CMakeLists.txt.user 
+ 
+# ===== IDE ===== 
+.vscode/ 
+.idea/ 
+*.iml 
+ 
+# ===== 编译产物 ===== 
+*.o 
+*.a 
+*.so 
+*.dylib 
+*.dll 
+*.exe 
+*.pdb 
 client/.qtcreator/ 
 client_old/ 
-
 client/third_party/ 
+target/ 
