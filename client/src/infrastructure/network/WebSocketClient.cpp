@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <thread>
 #include <chrono>
+#include <QTimer>  // ✅ 添加
 
 WebSocketClient::WebSocketClient(QObject *parent)
     : QObject(parent)
@@ -21,6 +22,10 @@ WebSocketClient::WebSocketClient(QObject *parent)
         m_client.set_message_handler([this](websocketpp::connection_hdl, WebSocketPPClient::message_ptr msg) {
             onMessage(msg->get_payload());
         });
+
+        // ✅ 初始化重连定时器
+        m_reconnectTimer = new QTimer(this);
+        connect(m_reconnectTimer, &QTimer::timeout, this, &WebSocketClient::attemptReconnect);
 
         qDebug() << "✅ WebSocketClient 初始化完成";
     } catch (const std::exception &e) {
@@ -43,6 +48,7 @@ void WebSocketClient::connectToServer(const QString &host, quint16 port)
     m_host = host;
     m_port = port;
     m_connected = false;
+    m_reconnectAttempts = 0;  // ✅ 重置重连计数
 
     qDebug() << "🔌 连接 WebSocket 服务器:" << host << port;
 
@@ -112,10 +118,8 @@ void WebSocketClient::onMessage(const std::string &message)
     QString msg = QString::fromStdString(message);
     qDebug() << "📩 收到原始消息:" << msg;
 
-    // ✅ 先转发所有消息给 MainWindow
     emit messageReceived(msg);
 
-    // 解析用户列表
     QJsonDocument doc = QJsonDocument::fromJson(msg.toUtf8());
     if (doc.isObject()) {
         QJsonObject obj = doc.object();
@@ -140,6 +144,12 @@ void WebSocketClient::onMessage(const std::string &message)
 void WebSocketClient::onOpen(websocketpp::connection_hdl hdl)
 {
     m_connected = true;
+
+    if (m_reconnectTimer) {
+        m_reconnectTimer->stop();
+        emit reconnectSuccess();
+    }
+
     qDebug() << "✅ WebSocket 连接成功！";
     emit connected();
 }
@@ -149,6 +159,15 @@ void WebSocketClient::onClose(websocketpp::connection_hdl hdl)
     m_connected = false;
     qDebug() << "❌ WebSocket 断开连接";
     emit disconnected();
+
+    // ✅ 启动重连
+    if (m_reconnectEnabled) {
+        emit reconnecting();
+        m_reconnectAttempts++;
+        int delay = qMin(m_reconnectAttempts * 2000, 10000); // 2s, 4s, 6s, 8s, 10s
+        m_reconnectTimer->start(delay);
+        qDebug() << "🔄 将在" << delay/1000 << "秒后重连 (尝试" << m_reconnectAttempts << "/" << m_maxReconnectAttempts << ")";
+    }
 }
 
 void WebSocketClient::onFail(websocketpp::connection_hdl hdl)
@@ -156,4 +175,26 @@ void WebSocketClient::onFail(websocketpp::connection_hdl hdl)
     m_connected = false;
     qDebug() << "❌ WebSocket 连接失败";
     emit errorOccurred("WebSocket 连接失败");
+}
+
+void WebSocketClient::attemptReconnect()
+{
+    if (m_reconnectAttempts > m_maxReconnectAttempts) {
+        qDebug() << "❌ 重连失败，已达最大尝试次数";
+        emit reconnectFailed();
+        return;
+    }
+
+    qDebug() << "🔄 尝试重连..." << m_reconnectAttempts << "/" << m_maxReconnectAttempts;
+    connectToServer(m_host, m_port);
+}
+
+void WebSocketClient::setReconnectEnabled(bool enabled)
+{
+    m_reconnectEnabled = enabled;
+}
+
+void WebSocketClient::onDisconnected()
+{
+    // 由 onClose 处理
 }

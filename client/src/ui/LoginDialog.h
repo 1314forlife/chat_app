@@ -3,7 +3,7 @@
 
 #include <QDialog>
 #include <memory>
-
+#include <QMouseEvent>
 class QLineEdit;
 class QPushButton;
 class QLabel;
@@ -23,6 +23,11 @@ private slots:
     void onLoginFailed(const QString &error);
     void onRegisterSuccess(const QString &username);
 
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+
 private:
     void setupUI();
 
@@ -34,6 +39,10 @@ private:
     QPushButton *m_registerButton;  // 新增：注册按钮
     QLabel *m_statusLabel;
     bool m_isRegisterMode;          // 新增：是否注册模式
+
+    bool m_dragging = false;
+    QPoint m_dragStartPos;
+
 };
 
 #endif

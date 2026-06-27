@@ -14,6 +14,7 @@
 #include <QTimer>
 #include <QCloseEvent>
 #include <QFile>
+#include <QScrollBar>
 
 MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                        std::shared_ptr<WebSocketClient> wsClient,
@@ -64,7 +65,7 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                                         qDebug() << "✅ 添加用户:" << username;
                                     }
                                 }
-                                return;
+                                return;  // ✅ 不显示在聊天框
                             } else if (event == "user_offline") {
                                 QString username = contentObj["username"].toString();
                                 for (int i = 0; i < m_contactList->count(); i++) {
@@ -75,14 +76,41 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                                         break;
                                     }
                                 }
-                                return;
+                                return;  // ✅ 不显示在聊天框
                             }
+                        }
+                    }
+                    return;  // ✅ 系统消息不显示在聊天框
+                }
+
+                // ✅ 只有普通聊天消息才显示
+                // 检查是否是聊天消息（有 from 和 content）
+                if (obj.contains("status") && !obj.contains("from")) {
+                    qDebug() << "📩 忽略命令响应";
+                    return;
+                }
+
+                // ✅ 只有普通聊天消息才显示（有 from 和 content）
+                if (obj.contains("from") && obj.contains("content")) {
+                    QString from = obj["from"].toString();
+                    QString content = obj["content"].toString();
+
+                    if (from != "system" && from != m_currentUser) {
+                        // ✅ 去重：防止重复消息
+                        QString key = from + content;
+                        qint64 now = QDateTime::currentMSecsSinceEpoch();
+                        if (key != m_lastMessageKey || now - m_lastMessageTime > 500) {
+                            appendMessage(from, content, false);
+                            m_lastMessageKey = key;
+                            m_lastMessageTime = now;
+                        } else {
+                            qDebug() << "📩 忽略重复消息:" << content;
                         }
                     }
                     return;
                 }
 
-                appendMessage("服务器", msg);
+                qDebug() << "📩 忽略非聊天消息";
             });
 
 
@@ -98,19 +126,67 @@ MainWindow::~MainWindow() {}
 
 void MainWindow::setupUI()
 {
-    QFile styleFile("C:/my-github-project/rust/chat_app/client/resources/style.qss");
-    if (styleFile.open(QFile::ReadOnly)) {
-        QString style = QString::fromUtf8(styleFile.readAll());
-        this->setStyleSheet(style);
-        qDebug() << "✅ MainWindow 样式加载成功";
-    } else {
-        qDebug() << "❌ MainWindow 样式加载失败";
-    }
+    // 无边框
+    setWindowFlags(Qt::FramelessWindowHint);
+
     setWindowTitle("Rust Chat");
     resize(900, 600);
 
     auto *central = new QWidget(this);
-    auto *mainLayout = new QHBoxLayout(central);
+    auto *mainLayout = new QVBoxLayout(central);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+
+    // ============================================================
+    // ✅ 自定义标题栏
+    // ============================================================
+    auto *titleBar = new QWidget(this);
+    titleBar->setObjectName("titleBar");
+    titleBar->setFixedHeight(44);
+
+    auto *titleBarLayout = new QHBoxLayout(titleBar);
+    titleBarLayout->setContentsMargins(16, 0, 12, 0);
+    titleBarLayout->setSpacing(6);
+
+    auto *titleText = new QLabel("✦ Rust Chat", this);
+    titleText->setObjectName("titleText");
+
+    auto *minBtn = new QPushButton("─", this);
+    auto *maxBtn = new QPushButton("☐", this);
+    auto *closeBtn = new QPushButton("✕", this);
+    minBtn->setObjectName("minBtn");
+    maxBtn->setObjectName("maxBtn");
+    closeBtn->setObjectName("closeBtn");
+
+    minBtn->setFixedSize(28, 24);
+    maxBtn->setFixedSize(28, 24);
+    closeBtn->setFixedSize(28, 24);
+
+    titleBarLayout->addWidget(titleText);
+    titleBarLayout->addStretch();
+    titleBarLayout->addWidget(minBtn);
+    titleBarLayout->addWidget(maxBtn);
+    titleBarLayout->addWidget(closeBtn);
+
+    connect(closeBtn, &QPushButton::clicked, this, &MainWindow::close);
+    connect(minBtn, &QPushButton::clicked, this, &MainWindow::showMinimized);
+    connect(maxBtn, &QPushButton::clicked, this, [this]() {
+        if (this->isMaximized()) {
+            this->showNormal();
+        } else {
+            this->showMaximized();
+        }
+    });
+
+    mainLayout->addWidget(titleBar);
+
+    // ============================================================
+    // 主内容
+    // ============================================================
+    auto *contentWidget = new QWidget(this);
+    auto *contentLayout = new QHBoxLayout(contentWidget);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(0);
 
     auto *leftPanel = new QWidget(this);
     leftPanel->setFixedWidth(250);
@@ -124,15 +200,19 @@ void MainWindow::setupUI()
     m_contactList->setStyleSheet("QListWidget::item { padding: 8px; }");
     leftLayout->addWidget(m_contactList);
 
-    mainLayout->addWidget(leftPanel);
+    contentLayout->addWidget(leftPanel);
 
     auto *rightPanel = new QWidget(this);
     auto *rightLayout = new QVBoxLayout(rightPanel);
 
-    m_chatDisplay = new QTextEdit(this);
-    m_chatDisplay->setReadOnly(true);
-    m_chatDisplay->setStyleSheet("font-size: 14px;");
-    rightLayout->addWidget(m_chatDisplay);
+    m_chatContainer = new QWidget(this);
+    m_chatContainer->setStyleSheet("background: transparent;");
+    m_chatLayout = new QVBoxLayout(m_chatContainer);
+    m_chatLayout->setAlignment(Qt::AlignTop);
+    m_chatLayout->setSpacing(6);
+    m_chatLayout->setContentsMargins(0, 0, 0, 0);
+
+    rightLayout->addWidget(m_chatContainer);
 
     auto *inputLayout = new QHBoxLayout();
     m_messageInput = new QLineEdit(this);
@@ -145,7 +225,9 @@ void MainWindow::setupUI()
     m_statusLabel = new QLabel("⏳ 未连接服务器", this);
     rightLayout->addWidget(m_statusLabel);
 
-    mainLayout->addWidget(rightPanel);
+    contentLayout->addWidget(rightPanel);
+
+    mainLayout->addWidget(contentWidget);
 
     setCentralWidget(central);
 
@@ -159,10 +241,71 @@ void MainWindow::setupUI()
             data["content"] = text;
             json["data"] = data;
             m_wsClient->sendMessage(QString::fromUtf8(QJsonDocument(json).toJson()));
-            appendMessage("我", text);
+
+            appendMessage("我", text, true);  // ✅ 只调用一次
             m_messageInput->clear();
         }
     });
+
+    // 加载样式
+    QFile styleFile("C:/my-github-project/rust/chat_app/client/resources/style.qss");
+    if (styleFile.open(QFile::ReadOnly)) {
+        QString style = QString::fromUtf8(styleFile.readAll());
+        this->setStyleSheet(style);
+        qDebug() << "✅ MainWindow 样式加载成功";
+    } else {
+        qDebug() << "❌ MainWindow 样式加载失败";
+    }
+}
+
+void MainWindow::appendMessage(const QString &sender, const QString &content, bool isMine)
+{
+    QString time = QDateTime::currentDateTime().toString("hh:mm");
+
+    QWidget *row = new QWidget();
+    QHBoxLayout *rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(8);
+
+    // 气泡容器
+    QWidget *bubbleContainer = new QWidget();
+    QVBoxLayout *bubbleLayout = new QVBoxLayout(bubbleContainer);
+    bubbleLayout->setContentsMargins(12, 8, 12, 4);
+    bubbleLayout->setSpacing(2);
+
+    // 消息文字
+    QLabel *msgLabel = new QLabel(content);
+    msgLabel->setWordWrap(true);
+    msgLabel->setMaximumWidth(300);
+
+    // 时间戳
+    QLabel *timeLabel = new QLabel(time);
+    timeLabel->setAlignment(Qt::AlignRight);
+    timeLabel->setStyleSheet("color: rgba(255,255,255,0.2); font-size: 10px;");
+
+    bubbleLayout->addWidget(msgLabel);
+    bubbleLayout->addWidget(timeLabel);
+
+    if (isMine) {
+        bubbleContainer->setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            "stop:0 #a78bfa, stop:1 #8b5cf6);"
+            "border-radius: 14px 14px 4px 14px;"
+            );
+        rowLayout->addStretch();
+        rowLayout->addWidget(bubbleContainer);
+    } else {
+        bubbleContainer->setStyleSheet(
+            "background: rgba(255,255,255,0.06);"
+            "border: 1px solid rgba(255,255,255,0.04);"
+            "border-radius: 14px 14px 14px 4px;"
+            );
+        rowLayout->addWidget(bubbleContainer);
+        rowLayout->addStretch();
+    }
+
+    m_chatLayout->addWidget(row);
+    m_chatLayout->addSpacing(2);
 }
 
 void MainWindow::setCurrentUser(const QString &username)
@@ -182,7 +325,7 @@ void MainWindow::setCurrentUser(const QString &username)
     qDebug() << "✅ setCurrentUser:" << username;
     setWindowTitle(QString("Rust Chat - %1").arg(username));
 
-    m_wsClient->connectToServer("192.168.0.102", 3000);
+    m_wsClient->connectToServer("192.168.0.103", 3000);
     m_statusLabel->setText("⏳ 正在连接服务器...");
 }
 
@@ -236,18 +379,20 @@ void MainWindow::onUserListReceived(const QVariantList &users)
     m_statusLabel->setText(QString("✅ 在线用户: %1 人").arg(m_contactList->count()));
 }
 
-void MainWindow::appendMessage(const QString &sender, const QString &content)
-{
-    QString time = QDateTime::currentDateTime().toString("hh:mm");
-    m_chatDisplay->append(QString("[%1] %2: %3").arg(time, sender, content));
-}
+
 
 void MainWindow::onContactSelected(int row)
 {
     if (row < 0 || row >= m_contactList->count()) return;
     QString contact = m_contactList->item(row)->text();
     m_statusLabel->setText(QString("💬 正在与 %1 聊天").arg(contact));
-    m_chatDisplay->append(QString("📞 开始与 %1 聊天...").arg(contact));
+
+    // ✅ 清空聊天消息（用 m_chatLayout）
+    QLayoutItem *item;
+    while ((item = m_chatLayout->takeAt(0)) != nullptr) {
+        delete item->widget();
+        delete item;
+    }
 }
 
 void MainWindow::onRegisterSuccess(const QString &username)
@@ -276,4 +421,29 @@ void MainWindow::closeEvent(QCloseEvent *event)
     }
 
     event->accept();
+}
+
+void MainWindow::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = true;
+        m_dragStartPos = event->globalPosition().toPoint() - frameGeometry().topLeft();
+        event->accept();
+    }
+}
+
+void MainWindow::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_dragging) {
+        move(event->globalPosition().toPoint() - m_dragStartPos);
+        event->accept();
+    }
+}
+
+void MainWindow::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = false;
+        event->accept();
+    }
 }

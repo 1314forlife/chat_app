@@ -263,3 +263,29 @@ void LoginDialog::onLoginFailed(const QString &error)
         setWindowTitle("登录/注册");
     }
 }
+
+
+void LoginDialog::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = true;
+        m_dragStartPos = event->globalPosition().toPoint() - frameGeometry().topLeft();
+        event->accept();
+    }
+}
+
+void LoginDialog::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_dragging) {
+        move(event->globalPosition().toPoint() - m_dragStartPos);
+        event->accept();
+    }
+}
+
+void LoginDialog::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = false;
+        event->accept();
+    }
+}

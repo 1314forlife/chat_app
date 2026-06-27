@@ -23,7 +23,7 @@ void LoginUseCase::login(const QString &username, const QString &password)
     m_pendingUsername = username;
     m_pendingNickname = username;
     m_isRegisterMode = false;
-    m_wsClient->connectToServer("192.168.0.102", 3000);
+    m_wsClient->connectToServer("192.168.0.103", 3000);
 }
 
 void LoginUseCase::registerUser(const QString &username, const QString &password, const QString &nickname)
@@ -33,7 +33,7 @@ void LoginUseCase::registerUser(const QString &username, const QString &password
     m_pendingUsername = username;
     m_pendingNickname = nickname.isEmpty() ? username : nickname;
     m_isRegisterMode = true;
-    m_wsClient->connectToServer("192.168.0.102", 3000);
+    m_wsClient->connectToServer("192.168.0.103", 3000);
 }
 
 void LoginUseCase::onWebSocketConnected()
