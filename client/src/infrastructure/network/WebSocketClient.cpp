@@ -48,17 +48,21 @@ void WebSocketClient::connectToServer(const QString &host, quint16 port)
     m_host = host;
     m_port = port;
     m_connected = false;
-    m_reconnectAttempts = 0;  // ✅ 重置重连计数
 
     qDebug() << "🔌 连接 WebSocket 服务器:" << host << port;
 
     try {
+        // ✨ [核心修复] 如果 client 之前运行过并停止了，必须在重新 run 之前 reset
+        if (m_client.stopped()) {
+            m_client.reset();
+        }
+
         std::string uri = "ws://" + host.toStdString() + ":" + std::to_string(port) + "/ws";
         websocketpp::lib::error_code ec;
         WebSocketPPClient::connection_ptr con = m_client.get_connection(uri, ec);
 
         if (ec) {
-            qDebug() << "❌ 连接失败:" << ec.message().c_str();
+            qDebug() << "❌ 获取连接失败:" << ec.message().c_str();
             emit errorOccurred(QString::fromStdString(ec.message()));
             return;
         }
@@ -66,9 +70,11 @@ void WebSocketClient::connectToServer(const QString &host, quint16 port)
         m_hdl = con->get_handle();
         m_client.connect(con);
 
+        // 创建独立线程运行网络轮询
         std::thread([this]() {
             try {
                 m_client.run();
+                qDebug() << "ℹ️ WebSocket 事件循环线程安全退出";
             } catch (const std::exception &e) {
                 qDebug() << "❌ WebSocket 运行错误:" << e.what();
             }
@@ -144,13 +150,14 @@ void WebSocketClient::onMessage(const std::string &message)
 void WebSocketClient::onOpen(websocketpp::connection_hdl hdl)
 {
     m_connected = true;
+    qDebug() << "✅ WebSocket 连接成功！";
 
-    if (m_reconnectTimer) {
-        m_reconnectTimer->stop();
+    // ✅ 如果是重连，发送重连成功信号并重置计数
+    if (m_reconnectAttempts > 0) {
         emit reconnectSuccess();
+        m_reconnectAttempts = 0;  // 重置计数
     }
 
-    qDebug() << "✅ WebSocket 连接成功！";
     emit connected();
 }
 
@@ -160,14 +167,22 @@ void WebSocketClient::onClose(websocketpp::connection_hdl hdl)
     qDebug() << "❌ WebSocket 断开连接";
     emit disconnected();
 
-    // ✅ 启动重连
-    if (m_reconnectEnabled) {
-        emit reconnecting();
-        m_reconnectAttempts++;
-        int delay = qMin(m_reconnectAttempts * 2000, 10000); // 2s, 4s, 6s, 8s, 10s
-        m_reconnectTimer->start(delay);
-        qDebug() << "🔄 将在" << delay/1000 << "秒后重连 (尝试" << m_reconnectAttempts << "/" << m_maxReconnectAttempts << ")";
-    }
+    // 用 Qt 信号转到主线程执行定时器触发
+    QMetaObject::invokeMethod(this, [this]() {
+        if (m_reconnectEnabled) {
+            // ⚠️ 移除这里的 m_reconnectAttempts++; 防止双倍递增
+
+            // 计算基于当前有效尝试次数的延迟
+            int nextAttempt = m_reconnectAttempts + 1;
+            int delay = qMin(nextAttempt * 2000, 10000);
+
+            qDebug() << "🔄 将在" << delay/1000 << "秒后尝试下一次重连...";
+            emit reconnecting();
+
+            // 启动单次定时器触发重连
+            QTimer::singleShot(delay, this, &WebSocketClient::attemptReconnect);
+        }
+    }, Qt::QueuedConnection);
 }
 
 void WebSocketClient::onFail(websocketpp::connection_hdl hdl)
@@ -179,14 +194,26 @@ void WebSocketClient::onFail(websocketpp::connection_hdl hdl)
 
 void WebSocketClient::attemptReconnect()
 {
-    if (m_reconnectAttempts > m_maxReconnectAttempts) {
-        qDebug() << "❌ 重连失败，已达最大尝试次数";
-        emit reconnectFailed();
+    if (m_connected) {
+        qDebug() << "✅ 已连接，停止重连";
+        m_reconnectAttempts = 0;
         return;
     }
 
-    qDebug() << "🔄 尝试重连..." << m_reconnectAttempts << "/" << m_maxReconnectAttempts;
-    connectToServer(m_host, m_port);
+    // ✅ 统一在这里自增和限制
+    m_reconnectAttempts++;
+    qDebug() << "🔄 正在尝试重连..." << m_reconnectAttempts << "/" << m_maxReconnectAttempts;
+
+    if (m_reconnectAttempts > m_maxReconnectAttempts) {
+        qDebug() << "❌ 达到最大重连次数，放弃重连";
+        emit reconnectFailed();
+        m_reconnectAttempts = 0;
+        return;
+    }
+
+    if (!m_host.isEmpty()) {
+        connectToServer(m_host, m_port);
+    }
 }
 
 void WebSocketClient::setReconnectEnabled(bool enabled)
@@ -194,7 +221,3 @@ void WebSocketClient::setReconnectEnabled(bool enabled)
     m_reconnectEnabled = enabled;
 }
 
-void WebSocketClient::onDisconnected()
-{
-    // 由 onClose 处理
-}

@@ -36,7 +36,6 @@ signals:
     void reconnectFailed();   //  重连失败
 
 private slots:
-    void onDisconnected();
     void attemptReconnect();
 
 

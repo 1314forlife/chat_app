@@ -26,6 +26,33 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
 {
     setupUI();
 
+    // ============================================================
+    // 断线重连信号处理
+    // ============================================================
+    connect(m_wsClient.get(), &WebSocketClient::reconnecting,
+            this, [this]() {
+                m_statusLabel->setText("🔄 连接断开，正在重连...");
+                m_statusLabel->setStyleSheet("color: #fbbf24;");
+                qDebug() << "🔄 断线重连中...";
+            });
+
+    connect(m_wsClient.get(), &WebSocketClient::reconnectSuccess,
+            this, [this]() {
+                m_statusLabel->setText("✅ 重连成功！");
+                m_statusLabel->setStyleSheet("color: #34d399;");
+                qDebug() << "✅ 重连成功！";
+
+                // 重新登录
+                onConnectToServer();
+            });
+
+    connect(m_wsClient.get(), &WebSocketClient::reconnectFailed,
+            this, [this]() {
+                m_statusLabel->setText("❌ 重连失败，请手动重启客户端");
+                m_statusLabel->setStyleSheet("color: #ef4444;");
+                qDebug() << "❌ 重连失败";
+            });
+
     connect(m_wsClient.get(), &WebSocketClient::connected,
             this, &MainWindow::onConnectToServer);
     connect(m_wsClient.get(), &WebSocketClient::userListReceived,
