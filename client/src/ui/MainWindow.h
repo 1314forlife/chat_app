@@ -14,6 +14,9 @@
 #include <QVBoxLayout>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <ui/VideoCallDialog.h>
+#include <infrastructure/media/WebRTCManager.h>
+
 class WebSocketClient;
 class LoginUseCase;
 
@@ -39,6 +42,7 @@ private slots:
     void onUserListReceived(const QVariantList &users);
     void onContactSelected(int row);
     void onRegisterSuccess(const QString &username);
+    // ✅ 这里已经干净了，没有任何变量定义
 
 private:
     void setupUI();
@@ -51,6 +55,10 @@ private:
     std::shared_ptr<WebSocketClient> m_wsClient;
     QString m_currentUser;
     QString m_currentContact;
+
+    QPushButton      *m_videoCallBtn = nullptr; // 视频按钮
+    VideoCallDialog  *m_callDialog = nullptr;   // 视频弹窗
+    WebRTCManager    *m_rtcManager = nullptr;   // RTC管理器
 
     bool m_loginSent = false;
     bool m_dragging = false;

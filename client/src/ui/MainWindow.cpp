@@ -15,7 +15,7 @@
 #include <QCloseEvent>
 #include <QFile>
 #include <QApplication>
-
+#include <QScrollBar>
 
 MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                        std::shared_ptr<WebSocketClient> wsClient,
@@ -27,48 +27,140 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
     setupUI();
 
     // ============================================================
-    // 断线重连信号处理
+    // 1. 断线重连信号处理
     // ============================================================
-    connect(m_wsClient.get(), &WebSocketClient::reconnecting,
-            this, [this]() {
-                m_statusLabel->setText("🔄 连接断开，正在重连...");
-                m_statusLabel->setStyleSheet("color: #fbbf24;");
-                qDebug() << "🔄 断线重连中...";
+    connect(m_wsClient.get(), &WebSocketClient::reconnecting, this, [this]() {
+        m_statusLabel->setText("🔄 连接断开，正在重连...");
+        m_statusLabel->setStyleSheet("color: #fbbf24;");
+        qDebug() << "🔄 断线重连中...";
+    });
+
+    connect(m_wsClient.get(), &WebSocketClient::reconnectSuccess, this, [this]() {
+        m_statusLabel->setText("✅ 重连成功！");
+        m_statusLabel->setStyleSheet("color: #34d399;");
+        qDebug() << "✅ 重连成功！";
+        onConnectToServer(); // 重新登录
+    });
+
+    connect(m_wsClient.get(), &WebSocketClient::reconnectFailed, this, [this]() {
+        m_statusLabel->setText("❌ 重连失败，请手动重启客户端");
+        m_statusLabel->setStyleSheet("color: #ef4444;");
+    });
+
+    connect(m_wsClient.get(), &WebSocketClient::connected, this, &MainWindow::onConnectToServer);
+    connect(m_wsClient.get(), &WebSocketClient::userListReceived, this, &MainWindow::onUserListReceived);
+
+    // ============================================================
+    // 2. 核心重构：音视频分流信号处理（解决来电时序与本地预览）
+    // ============================================================
+
+    // 【被叫方】收到远端呼叫邀请 (Offer)
+    connect(m_wsClient.get(), &WebSocketClient::incomingVideoCall,
+            this, [this](const QString &fromUser, const QString &sdp) {
+                qDebug() << "🔔 [MainWindow] 收到视频来电，来自:" << fromUser;
+
+                if (m_callDialog || m_rtcManager) {
+                    qDebug() << "⚠️ 已经在通话中或正有呼入，忽略新呼叫";
+                    return;
+                }
+
+                // 1. 弹出接听/挂断界面 (false 代表是被呼叫方)
+                m_callDialog = new VideoCallDialog(fromUser, false, this);
+                m_callDialog->show();
+
+                // 2. 初始化 WebRTC 管理器
+                m_rtcManager = new WebRTCManager(this);
+
+                // 3. 绑定本地与远端画面渲染回调
+                connect(m_rtcManager, &WebRTCManager::localFrameReady, this, [this](const QImage &frame) {
+                    if(m_callDialog && m_callDialog->localVideoLabel())
+                        m_callDialog->localVideoLabel()->setPixmap(QPixmap::fromImage(frame.scaled(160, 120, Qt::KeepAspectRatio)));
+                });
+                connect(m_rtcManager, &WebRTCManager::remoteFrameReady, this, [this](const QImage &frame) {
+                    if(m_callDialog && m_callDialog->remoteVideoLabel())
+                        m_callDialog->remoteVideoLabel()->setPixmap(QPixmap::fromImage(frame.scaled(720, 400, Qt::KeepAspectRatio)));
+                });
+
+                // 4. 应答(Answer)或网络候选点(Candidate)发给对方
+                connect(m_rtcManager, &WebRTCManager::sendSignaling, this, [this, fromUser](const QString &t, const QString &s) {
+                    QJsonObject json;
+                    json["cmd"] = "video_rtc_signaling";
+                    QJsonObject d;
+                    d["to"] = fromUser;
+                    d["type"] = t;
+                    d["sdp"] = s;
+                    json["data"] = d;
+                    m_wsClient->sendMessage(QString::fromUtf8(QJsonDocument(json).toJson()));
+                });
+
+                // 5. 绑定本地点击挂断/拒绝
+                connect(m_callDialog, &VideoCallDialog::hangUpClicked, this, [this, fromUser]() {
+                    qDebug() << "🤙 本地点击挂断/拒绝...";
+
+                    QJsonObject json;
+                    json["cmd"] = "video_rtc_signaling";
+                    QJsonObject d;
+                    d["to"] = fromUser;
+                    d["type"] = "candidate";
+                    d["sdp"] = "hangup";
+                    json["data"] = d;
+                    m_wsClient->sendMessage(QString::fromUtf8(QJsonDocument(json).toJson()));
+
+                    if(m_callDialog) { m_callDialog->close(); m_callDialog->deleteLater(); m_callDialog = nullptr; }
+                    if(m_rtcManager) { m_rtcManager->deleteLater(); m_rtcManager = nullptr; }
+                });
+
+                // ✨ 【核心时序修复 1】：不等点击接听，收到来电时立刻进行硬件与拉流初始化！
+                // 这样用户在看到“接听/拒绝”弹窗的瞬间，右下角本地预览的 IPC 摄像头画面就已经活过来了。
+                m_rtcManager->init(false);
+
+                // 6. 绑定点击“接听”按钮：此时只做信令握手，开启传输通道
+                connect(m_callDialog, &VideoCallDialog::acceptClicked, this, [this, sdp]() {
+                    qDebug() << "🚀 用户点击接听，通过应答(Answer)激活双向音视频...";
+                    if (m_rtcManager) {
+                        m_rtcManager->receiveSignaling("offer", sdp); // 喂入 Offer，内部自动触发 sendSignaling 发送 Answer
+                    }
+                });
             });
 
-    connect(m_wsClient.get(), &WebSocketClient::reconnectSuccess,
-            this, [this]() {
-                m_statusLabel->setText("✅ 重连成功！");
-                m_statusLabel->setStyleSheet("color: #34d399;");
-                qDebug() << "✅ 重连成功！";
-
-                // 重新登录
-                onConnectToServer();
+    // 【主叫方】收到对方同意后回传的 Answer 信令
+    connect(m_wsClient.get(), &WebSocketClient::incomingVideoAnswer,
+            this, [this](const QString &fromUser, const QString &sdp) {
+                qDebug() << "🤝 对方已接听电话！收到 Answer 信令";
+                if (m_rtcManager) {
+                    m_rtcManager->receiveSignaling("answer", sdp);
+                }
             });
 
-    connect(m_wsClient.get(), &WebSocketClient::reconnectFailed,
-            this, [this]() {
-                m_statusLabel->setText("❌ 重连失败，请手动重启客户端");
-                m_statusLabel->setStyleSheet("color: #ef4444;");
-                qDebug() << "❌ 重连失败";
+    // 【通用】收到网络打洞候选点 (Candidate)
+    connect(m_wsClient.get(), &WebSocketClient::incomingIceCandidate,
+            this, [this](const QString &fromUser, const QString &sdp) {
+                if (sdp == "hangup") {
+                    qDebug() << "远端已挂断通话";
+                    if(m_callDialog) { m_callDialog->close(); m_callDialog->deleteLater(); m_callDialog = nullptr; }
+                    if(m_rtcManager) { m_rtcManager->deleteLater(); m_rtcManager = nullptr; }
+                    return;
+                }
+
+                if (m_rtcManager) {
+                    m_rtcManager->receiveSignaling("candidate", sdp);
+                }
             });
 
-    connect(m_wsClient.get(), &WebSocketClient::connected,
-            this, &MainWindow::onConnectToServer);
-    connect(m_wsClient.get(), &WebSocketClient::userListReceived,
-            this, &MainWindow::onUserListReceived);
 
+    // ============================================================
+    // 3. 文本普通聊天消息与业务指令逻辑
+    // ============================================================
     connect(m_wsClient.get(), &WebSocketClient::messageReceived,
             this, [this](const QString &msg) {
-                qDebug() << "📩 收到消息:" << msg;
                 QJsonDocument doc = QJsonDocument::fromJson(msg.toUtf8());
                 if (!doc.isObject()) return;
 
                 QJsonObject obj = doc.object();
+                QString action = obj.value("action").toString();
+                QString cmd = obj["cmd"].toString();
+                QJsonObject data = obj["data"].toObject();
 
-                // ============================================================
-                // 1. 系统消息（上线/下线）
-                // ============================================================
                 if (obj.contains("from") && obj["from"].toString() == "system") {
                     QString content = obj["content"].toString();
                     QJsonDocument contentDoc = QJsonDocument::fromJson(content.toUtf8());
@@ -76,23 +168,17 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                         QJsonObject contentObj = contentDoc.object();
                         if (contentObj.contains("event")) {
                             QString event = contentObj["event"].toString();
-                            qDebug() << "📌 事件:" << event;
-
                             if (event == "user_online") {
                                 QJsonObject user = contentObj["user"].toObject();
                                 QString username = user["username"].toString();
                                 if (username != m_currentUser) {
                                     bool exists = false;
                                     for (int i = 0; i < m_contactList->count(); i++) {
-                                        if (m_contactList->item(i)->text() == username) {
-                                            exists = true;
-                                            break;
-                                        }
+                                        if (m_contactList->item(i)->text() == username) { exists = true; break; }
                                     }
                                     if (!exists) {
                                         m_contactList->addItem(username);
                                         m_statusLabel->setText(QString("✅ %1 上线了").arg(username));
-                                        qDebug() << "✅ 添加用户:" << username;
                                     }
                                 }
                                 return;
@@ -102,7 +188,6 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                                     if (m_contactList->item(i)->text() == username) {
                                         delete m_contactList->takeItem(i);
                                         m_statusLabel->setText(QString("❌ %1 下线了").arg(username));
-                                        qDebug() << "✅ 移除用户:" << username;
                                         break;
                                     }
                                 }
@@ -114,29 +199,20 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                 }
 
                 if(obj.contains("status") && obj["status"].toString() == "success") {
-                    // 检查是否是历史消息（data 是数组）
                     if (obj.contains("data") && obj["data"].isArray()) {
                         QJsonArray messages = obj["data"].toArray();
-
-                        // 如果数组不为空，且第一个元素有 "from" 字段，说明是历史消息
                         bool isHistory = false;
                         if (!messages.isEmpty() && messages[0].isObject()) {
                             QJsonObject first = messages[0].toObject();
-                            if (first.contains("from") && first.contains("content")) {
-                                isHistory = true;
-                            }
+                            if (first.contains("from") && first.contains("content")) isHistory = true;
                         }
 
                         if (isHistory) {
-                            qDebug() << "📜 收到历史消息，数量:" << messages.size();
-
-                            // 清空聊天布局
                             QLayoutItem *layoutItem;
                             while ((layoutItem = m_chatLayout->takeAt(0)) != nullptr) {
                                 delete layoutItem->widget();
                                 delete layoutItem;
                             }
-
                             if (messages.isEmpty()) {
                                 appendMessage("系统", "暂无历史消息", false);
                             } else {
@@ -144,46 +220,29 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                                     QJsonObject msgObj = val.toObject();
                                     QString from = msgObj["from"].toString();
                                     QString content = msgObj["content"].toString();
-                                    if (from == m_currentUser) {
-                                        appendMessage("我", content, true);
-                                    } else {
-                                        appendMessage(from, content, false);
-                                    }
+                                    if (from == m_currentUser) appendMessage("我", content, true);
+                                    else appendMessage(from, content, false);
                                 }
-                                qDebug() << "✅ 显示" << messages.size() << "条历史消息";
                             }
                             return;
                         }
                     }
                 }
 
-                // ============================================================
-                // 2. 普通聊天消息
-                // ============================================================
                 if (obj.contains("from") && obj.contains("content")) {
                     QString from = obj["from"].toString();
                     QString content = obj["content"].toString();
 
                     if (from != "system") {
-                        // ✅ 如果不是当前聊天对象，标记未读
-                        if (from != m_currentContact) {
-                            markUnread(from);
-                        }
+                        if (from != m_currentContact) markUnread(from);
+                        if (from != m_currentUser) playNotificationSound();
 
-                        // ✅ 播放声音提示（只要不是自己发的）
-                        if (from != m_currentUser) {
-                            playNotificationSound();
-                        }
-
-                        // 去重
                         QString key = from + content;
                         qint64 now = QDateTime::currentMSecsSinceEpoch();
                         if (key != m_lastMessageKey || now - m_lastMessageTime > 500) {
-                            // 如果是当前聊天对象，显示消息
                             if (from == m_currentContact) {
                                 appendMessage(from, content, false);
                             } else {
-                                // 不是当前聊天对象，只在状态栏提示
                                 m_statusLabel->setText(QString("📩 来自 %1: %2").arg(from, content));
                             }
                             m_lastMessageKey = key;
@@ -193,23 +252,13 @@ MainWindow::MainWindow(std::shared_ptr<LoginUseCase> loginUseCase,
                     return;
                 }
 
-                // ============================================================
-                // 3. 命令响应
-                // ============================================================
-                if (obj.contains("status") && !obj.contains("from")) {
-                    qDebug() << "📩 命令响应:" << obj["status"].toString();
-                    return;
-                }
-
+                if (obj.contains("status") && !obj.contains("from")) { return; }
                 qDebug() << "📩 忽略非聊天消息";
             });
 
-    connect(m_contactList, &QListWidget::itemClicked,
-            [this](QListWidgetItem *item) {
-                if (item) {
-                    onContactSelected(m_contactList->row(item));
-                }
-            });
+    connect(m_contactList, &QListWidget::itemClicked, [this](QListWidgetItem *item) {
+        if (item) onContactSelected(m_contactList->row(item));
+    });
 }
 
 MainWindow::~MainWindow() {}
@@ -225,9 +274,6 @@ void MainWindow::setupUI()
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // ============================================================
-    // 1. 标题栏 (加一条淡淡的下边框区分)
-    // ============================================================
     auto *titleBar = new QWidget(this);
     titleBar->setObjectName("titleBar");
     titleBar->setFixedHeight(40);
@@ -266,21 +312,14 @@ void MainWindow::setupUI()
 
     mainLayout->addWidget(titleBar);
 
-    // ============================================================
-    // 主内容
-    // ============================================================
     auto *contentWidget = new QWidget(this);
     auto *contentLayout = new QHBoxLayout(contentWidget);
     contentLayout->setContentsMargins(0, 0, 0, 0);
     contentLayout->setSpacing(0);
 
-    // ============================================================
-    // 2. 左侧 - 好友列表 (宽度 240，加右边框线)
-    // ============================================================
     auto *leftPanel = new QWidget(this);
     leftPanel->setObjectName("leftPanel");
     leftPanel->setFixedWidth(240);
-    // 通过样式表加一条垂直分割线
     leftPanel->setStyleSheet("QWidget#leftPanel { border-right: 1px solid rgba(255,255,255,0.05); }");
 
     auto *leftLayout = new QVBoxLayout(leftPanel);
@@ -304,16 +343,12 @@ void MainWindow::setupUI()
 
     contentLayout->addWidget(leftPanel);
 
-    // ============================================================
-    // 3. 右侧 - 整体聊天面板 (包含聊天、输入框、状态栏)
-    // ============================================================
     auto *rightPanel = new QWidget(this);
     rightPanel->setObjectName("rightPanel");
     auto *rightLayout = new QVBoxLayout(rightPanel);
-    rightLayout->setContentsMargins(0, 0, 0, 0); // 撑满右侧
+    rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
 
-    // 3.1 聊天顶部状态栏 (显示正在和谁聊天)
     auto *chatHeaderWidget = new QWidget(this);
     chatHeaderWidget->setFixedHeight(50);
     chatHeaderWidget->setStyleSheet("border-bottom: 1px solid rgba(255,255,255,0.05);");
@@ -324,18 +359,27 @@ void MainWindow::setupUI()
     chatTitleLabel->setObjectName("chatTitleLabel");
     chatTitleLabel->setStyleSheet("font-size: 14px; font-weight: 500; color: rgba(255,255,255,0.9);");
     chatHeaderLayout->addWidget(chatTitleLabel);
+
     chatHeaderLayout->addStretch();
 
+    m_videoCallBtn = new QPushButton("📹 视频通话", this);
+    m_videoCallBtn->setObjectName("videoCallBtn");
+    m_videoCallBtn->setFixedSize(100, 30);
+    m_videoCallBtn->setVisible(false);
+
+    m_videoCallBtn->setStyleSheet(
+        "QPushButton#videoCallBtn { background-color: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3); border-radius: 6px; font-size: 12px; }"
+        "QPushButton#videoCallBtn:hover { background-color: rgba(167,139,250,0.3); }"
+        );
+
+    chatHeaderLayout->addWidget(m_videoCallBtn);
     rightLayout->addWidget(chatHeaderWidget);
 
-    // 3.2 聊天消息容器 (必须加 ScrollArea，否则消息多了装不下)
-    // 这里为了不破坏你原本的布局，直接用 QWidget，但给它拉伸权重
     m_scrollArea = new QScrollArea(this);
     m_scrollArea->setObjectName("chatScrollArea");
-    m_scrollArea->setWidgetResizable(true); // 关键：允许内部部件自适应大小
-    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); // 禁用横向滚动条
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    // 美化滚动条：让它变成极简的细条，符合整体精致的 UI 风格
     m_scrollArea->setStyleSheet(
         "QScrollArea#chatScrollArea { background: transparent; border: none; }"
         "QScrollBar:vertical { width: 6px; background: transparent; margin: 0px; }"
@@ -345,23 +389,18 @@ void MainWindow::setupUI()
         "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
         );
 
-    // 2. 创建承载消息的气泡实体容器（作为 ScrollArea 的内容主体）
     m_chatContainer = new QWidget();
     m_chatContainer->setObjectName("chatContainer");
-    m_chatContainer->setStyleSheet("background: rgba(0, 0, 0, 0.05);"); // 保持你原有的深色底
+    m_chatContainer->setStyleSheet("background: rgba(0, 0, 0, 0.05);");
 
     m_chatLayout = new QVBoxLayout(m_chatContainer);
     m_chatLayout->setAlignment(Qt::AlignTop);
     m_chatLayout->setSpacing(10);
     m_chatLayout->setContentsMargins(20, 20, 20, 20);
 
-    // 3. 把实体容器塞进滚动外壳里
     m_scrollArea->setWidget(m_chatContainer);
-
-    // 4. 核心：把【滚动外壳】塞进右侧主布局，并赋予拉伸权重 1
     rightLayout->addWidget(m_scrollArea, 1);
 
-    // 3.3 底部输入区域
     auto *inputContainer = new QWidget(this);
     inputContainer->setStyleSheet("background: transparent;");
     auto *inputLayout = new QHBoxLayout(inputContainer);
@@ -391,7 +430,6 @@ void MainWindow::setupUI()
     inputLayout->addWidget(m_sendButton);
     rightLayout->addWidget(inputContainer);
 
-    // 3.4 最底部状态栏 (作为一个真正的底部条存在)
     auto *statusBarWidget = new QWidget(this);
     statusBarWidget->setFixedHeight(24);
     statusBarWidget->setStyleSheet("background: rgba(0,0,0,0.1); border-top: 1px solid rgba(255,255,255,0.03);");
@@ -411,9 +449,6 @@ void MainWindow::setupUI()
 
     setCentralWidget(central);
 
-    // ============================================================
-    // 信号连接与样式加载 (保持你原本的逻辑)
-    // ============================================================
     connect(m_sendButton, &QPushButton::clicked, [this]() {
         QString text = m_messageInput->text().trimmed();
         if (text.isEmpty()) {
@@ -429,7 +464,6 @@ void MainWindow::setupUI()
             return;
         }
 
-        // ✅ 发送 WebSocket 消息
         QJsonObject json;
         json["cmd"] = "send";
         QJsonObject data;
@@ -446,28 +480,55 @@ void MainWindow::setupUI()
     if (styleFile.open(QFile::ReadOnly)) {
         QString style = QString::fromUtf8(styleFile.readAll());
         this->setStyleSheet(style);
-        qDebug() << "✅ MainWindow 样式加载成功";
+        qDebug() << "MainWindow 样式加载成功";
     }
+
+    // 【主叫方】发起视频通话点击事件
+    connect(m_videoCallBtn, &QPushButton::clicked, [this]() {
+        if (m_currentContact.isEmpty()) return;
+
+        m_callDialog = new VideoCallDialog(m_currentContact, true, this);
+        m_callDialog->show();
+
+        m_rtcManager = new WebRTCManager(this);
+
+        connect(m_rtcManager, &WebRTCManager::localFrameReady, this, [this](const QImage &frame) {
+            if(m_callDialog) m_callDialog->localVideoLabel()->setPixmap(QPixmap::fromImage(frame.scaled(160, 120, Qt::KeepAspectRatio)));
+        });
+        connect(m_rtcManager, &WebRTCManager::remoteFrameReady, this, [this](const QImage &frame) {
+            if(m_callDialog) m_callDialog->remoteVideoLabel()->setPixmap(QPixmap::fromImage(frame.scaled(720, 400, Qt::KeepAspectRatio)));
+        });
+
+        connect(m_rtcManager, &WebRTCManager::sendSignaling, this, [this](const QString &type, const QString &sdp) {
+            QJsonObject json;
+            json["cmd"] = "video_rtc_signaling";
+            QJsonObject data;
+            data["to"] = m_currentContact;
+            data["type"] = type;
+            data["sdp"] = sdp;
+            json["data"] = data;
+            m_wsClient->sendMessage(QString::fromUtf8(QJsonDocument(json).toJson()));
+        });
+
+        connect(m_callDialog, &VideoCallDialog::hangUpClicked, this, [this]() {
+            m_callDialog->close(); m_callDialog->deleteLater(); m_callDialog = nullptr;
+            if(m_rtcManager) { m_rtcManager->deleteLater(); m_rtcManager = nullptr; }
+        });
+
+        m_rtcManager->init(true);
+    });
 }
 
-// ============================================================
-// ✅ 新增：播放提示音
-// ============================================================
 void MainWindow::playNotificationSound()
 {
-    // 使用系统默认提示音
     QApplication::beep();
 }
 
-// ============================================================
-// ✅ 新增：标记未读
-// ============================================================
 void MainWindow::markUnread(const QString &username)
 {
     for (int i = 0; i < m_contactList->count(); i++) {
         QListWidgetItem *item = m_contactList->item(i);
         if (item->text() == username) {
-            // 添加 🔴 标记
             item->setText(username + " 🔴");
             break;
         }
@@ -493,9 +554,6 @@ void MainWindow::loadHistory(const QString &contact)
     qDebug() << "📤 发送历史请求:" << QString::fromUtf8(QJsonDocument(json).toJson());
 }
 
-// ============================================================
-// appendMessage - 保留你的气泡逻辑
-// ============================================================
 void MainWindow::appendMessage(const QString &sender, const QString &content, bool isMine)
 {
     QString time = QDateTime::currentDateTime().toString("hh:mm");
@@ -543,8 +601,6 @@ void MainWindow::appendMessage(const QString &sender, const QString &content, bo
     m_chatLayout->addSpacing(2);
 
     if (m_scrollArea && m_scrollArea->verticalScrollBar()) {
-        // 使用 QTimer::singleShot 是为了给 Qt 留出微秒级的时间来渲染新气泡。
-        // 只有等气泡高度真正撑起来后，获取到的 maximum() 才是正确的底部高度。
         QTimer::singleShot(10, this, [this]() {
             QScrollBar *bar = m_scrollArea->verticalScrollBar();
             bar->setValue(bar->maximum());
@@ -617,9 +673,6 @@ void MainWindow::onUserListReceived(const QVariantList &users)
     m_statusLabel->setText(QString("✅ 在线用户: %1 人").arg(m_contactList->count()));
 }
 
-// ============================================================
-// ✅ 点击好友：清除标记，设置当前聊天对象
-// ============================================================
 void MainWindow::onContactSelected(int row)
 {
     if (row < 0 || row >= m_contactList->count()) return;
@@ -627,7 +680,6 @@ void MainWindow::onContactSelected(int row)
     QListWidgetItem *item = m_contactList->item(row);
     QString contact = item->text();
 
-    // ✅ 去掉 🔴 标记
     if (contact.contains(" 🔴")) {
         contact = contact.replace(" 🔴", "");
         item->setText(contact);
@@ -636,15 +688,17 @@ void MainWindow::onContactSelected(int row)
     m_currentContact = contact;
     m_statusLabel->setText(QString("💬 正在与 %1 聊天").arg(contact));
 
-    // 清空聊天消息
     QLayoutItem *layoutItem;
     while ((layoutItem = m_chatLayout->takeAt(0)) != nullptr) {
         delete layoutItem->widget();
         delete layoutItem;
     }
     loadHistory(contact);
-    // 提示开始聊天
     appendMessage("系统", QString("开始与 %1 聊天").arg(contact), false);
+
+    if (m_videoCallBtn) {
+        m_videoCallBtn->show();
+    }
 }
 
 void MainWindow::onRegisterSuccess(const QString &username)

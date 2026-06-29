@@ -31,6 +31,10 @@ signals:
     void errorOccurred(const QString &error);
     void userListReceived(const QVariantList &users);
 
+    void incomingVideoCall(const QString &fromUser, const QString &sdp);
+    void incomingVideoAnswer(const QString &fromUser, const QString &sdp);
+    void incomingIceCandidate(const QString &fromUser, const QString &sdp);
+
     void reconnecting();      //  正在重连
     void reconnectSuccess();  //  重连成功
     void reconnectFailed();   //  重连失败
@@ -55,6 +59,7 @@ private:
     int m_reconnectAttempts = 0;
     int m_maxReconnectAttempts = 5;
     bool m_reconnectEnabled = true;
+
 
 };
 

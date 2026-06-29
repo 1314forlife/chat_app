@@ -9,20 +9,13 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Multimedia MultimediaWidgets)
 
 set(THIRD_PARTY_DIR ${CMAKE_SOURCE_DIR}/third_party)
 
-# Boost 头文件路径（使用 Boost.Asio，不定义 ASIO_STANDALONE）
-set(BOOST_INCLUDE_DIR ${THIRD_PARTY_DIR}/boost_1_82_0)
-include_directories(${BOOST_INCLUDE_DIR})
-
-# websocketpp
-set(WEBSOCKETPP_INCLUDE_DIR ${THIRD_PARTY_DIR}/websocketpp)
-include_directories(${WEBSOCKETPP_INCLUDE_DIR})
-
-include_directories(${CMAKE_SOURCE_DIR}/src)
-
+# ============================================================
+# 📦 源文件与头文件
+# ============================================================
 set(SOURCES
     src/main.cpp
     src/common/Logger.cpp
@@ -43,6 +36,7 @@ set(SOURCES
     src/ui/ChatWidget.cpp
     src/ui/ContactList.cpp
     src/ui/MessageBubble.cpp
+    src/webrtc/WebRTCTest.cpp
 )
 
 set(HEADERS
@@ -78,24 +72,80 @@ set(HEADERS
     src/ui/ChatWidget.h
     src/ui/ContactList.h
     src/ui/MessageBubble.h
+    src/webrtc/WebRTCTest.h
 )
 
 set(RESOURCES
     resources/resources.qrc
 )
 
-
-qt_add_executable(chat_client ${SOURCES} ${HEADERS})
+# ============================================================
+# 🚀 先创建目标
+# ============================================================
+qt_add_executable(chat_client ${SOURCES} ${HEADERS}
+    src/webrtc/FFmpegTest.h
+    src/webrtc/FFmpegTest.cpp
+    src/webrtc/VideoCapture.h
+    src/webrtc/VideoCapture.cpp
+    src/webrtc/VideoEncoder.h
+    src/webrtc/VideoEncoder.cpp
+    src/webrtc/VideoDecoder.h
+    src/webrtc/VideoDecoder.cpp
+    src/infrastructure/media/WebRTCManager.h
+    src/infrastructure/media/WebRTCManager.cpp
+    src/ui/VideoCallDialog.h
+    src/ui/VideoCallDialog.cpp
+    src/infrastructure/media/IpcCapture.h)
 
 qt_add_resources(chat_client "resources"
     resources/resources.qrc
 )
 
+# ============================================================
+# 🔍 然后设置包含路径（在 qt_add_executable 之后）
+# ============================================================
+target_include_directories(chat_client PRIVATE
+    src
+    ${THIRD_PARTY_DIR}/boost_1_82_0
+    ${THIRD_PARTY_DIR}/websocketpp
+    ${THIRD_PARTY_DIR}/libdatachannel/include
+    ${THIRD_PARTY_DIR}/ffmpeg/include
+    ${THIRD_PARTY_DIR}/opencv/include
+)
+
+# ============================================================
+# 🛠️ 设置库路径（在 qt_add_executable 之后）
+# ============================================================
+set(DATACHANNEL_LIB_DIR ${THIRD_PARTY_DIR}/libdatachannel/lib)
+set(FFMPEG_LIB_DIR ${THIRD_PARTY_DIR}/ffmpeg/lib)
+set(OPENCV_LIB_DIR ${THIRD_PARTY_DIR}/opencv/lib)
+
 target_link_libraries(chat_client PRIVATE
     Qt6::Core
     Qt6::Widgets
     Qt6::Network
-    ws2_32
-)
+    Qt6::Multimedia
 
-target_include_directories(chat_client PRIVATE src)
+    # WebRTC 动态库
+    ${DATACHANNEL_LIB_DIR}/libdatachannel.dll.a
+    ${DATACHANNEL_LIB_DIR}/libjuice.a
+    ${DATACHANNEL_LIB_DIR}/libsrtp2.a
+
+    # FFmpeg 库
+    ${FFMPEG_LIB_DIR}/libavcodec.dll.a
+    ${FFMPEG_LIB_DIR}/libavformat.dll.a
+    ${FFMPEG_LIB_DIR}/libavutil.dll.a
+    ${FFMPEG_LIB_DIR}/libswscale.dll.a
+    ${FFMPEG_LIB_DIR}/libswresample.dll.a
+
+    #Opencv 库
+    ${OPENCV_LIB_DIR}/libopencv_core4100.dll.a
+    ${OPENCV_LIB_DIR}/libopencv_videoio4100.dll.a
+    ${OPENCV_LIB_DIR}/libopencv_imgproc4100.dll.a
+
+
+    # Windows 系统库
+    ws2_32
+    iphlpapi
+    crypt32
+)

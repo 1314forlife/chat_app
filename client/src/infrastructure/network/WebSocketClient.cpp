@@ -2,7 +2,7 @@
 #include <QDebug>
 #include <thread>
 #include <chrono>
-#include <QTimer>  // ✅ 添加
+#include <QTimer>
 
 WebSocketClient::WebSocketClient(QObject *parent)
     : QObject(parent)
@@ -124,13 +124,12 @@ void WebSocketClient::onMessage(const std::string &message)
     QString msg = QString::fromStdString(message);
     qDebug() << "📩 收到原始消息:" << msg;
 
-    emit messageReceived(msg);
-
     QJsonDocument doc = QJsonDocument::fromJson(msg.toUtf8());
     if (doc.isObject()) {
         QJsonObject obj = doc.object();
         QString status = obj["status"].toString();
 
+        // 1. 处理系统拉取用户列表的回复 (原本的逻辑保持不变)
         if (status == "success") {
             QJsonObject data = obj["data"].toObject();
             if (data.contains("users")) {
@@ -144,7 +143,44 @@ void WebSocketClient::onMessage(const std::string &message)
                 return;
             }
         }
+
+        // ============================================================
+        // 🌟 核心修改点：拦截并处理被后端包装过的 WebRTC 视频呼叫信令
+        // ============================================================
+        QString fromUser = obj["from"].toString();
+        QString contentStr = obj["content"].toString();
+
+        // 尝试解析 content 内部的字符串，看它是不是包含视频握手的 JSON
+        QJsonDocument contentDoc = QJsonDocument::fromJson(contentStr.toUtf8());
+        if (!contentDoc.isNull() && contentDoc.isObject()) {
+            QJsonObject rtcObj = contentDoc.object();
+
+            // 提取 WebRTC 握手的类型 ("offer", "answer" 或 "candidate")
+            QString rtcType = rtcObj["type"].toString();
+            QString sdp = rtcObj["sdp"].toString();
+
+            if (!rtcType.isEmpty()) {
+                qDebug() << "📹 [收到视频信令分流] 类型:" << rtcType << "来自:" << fromUser;
+
+                // 触发专门的视频信号（需要去 WebSocketClient.h 中声明这两个信号）
+                if (rtcType == "offer") {
+                    // 🔔 收到呼叫请求，通知 UI 弹出接听界面
+                    emit incomingVideoCall(fromUser, sdp);
+                } else if (rtcType == "answer") {
+                    // 🤝 对方接听了，回传了 answer
+                    emit incomingVideoAnswer(fromUser, sdp);
+                } else if (rtcType == "candidate") {
+                    // 🌐 穿透打洞候选地址
+                    emit incomingIceCandidate(fromUser, sdp);
+                }
+
+                return; // 🛑 核心：直接 return 拦截，不发出 messageReceived 信号防止滚进聊天框
+            }
+        }
     }
+
+    // 如果不是视频信令，也不是在线用户列表，则作为普通的文字聊天消息丢回给 UI 层处理
+    emit messageReceived(msg);
 }
 
 void WebSocketClient::onOpen(websocketpp::connection_hdl hdl)
