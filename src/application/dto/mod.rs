@@ -34,7 +34,12 @@ impl ChatResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginData {
     pub username: String,
-    pub nickname: String,
+    pub nickname: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogoutData {
+    pub username: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
